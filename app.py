@@ -913,13 +913,14 @@ with gr.Blocks(title="YF TTS · Burmese AI Voice Studio", theme=APP_THEME, css=A
     )
 
 # ==========================================================
-# 6. GOOGLE COLAB + CLOUDFLARE QUICK TUNNEL LAUNCHER
-#    - Gradio share=False (NO gradio.live)
-#    - Public URL: https://xxxxx.trycloudflare.com
+# 6. GOOGLE COLAB + CLOUDFLARE QUICK TUNNEL LAUNCHER (FIXED)
 # ==========================================================
+# Gradio runs only on localhost. cloudflared exposes that local port as
+# https://xxxx.trycloudflare.com. No gradio.live share tunnel is used.
 import socket
 import platform
 import urllib.request
+from pathlib import Path
 
 
 def _find_free_port():
@@ -929,8 +930,8 @@ def _find_free_port():
         return int(sock.getsockname()[1])
 
 
-def _wait_for_local_server(port, timeout=30):
-    """Wait until the local Gradio server is accepting connections."""
+def _wait_for_local_server(port, timeout=45):
+    """Wait until the local Gradio server is accepting TCP connections."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -952,19 +953,45 @@ def _cloudflared_download_url():
     return f"https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-{arch}"
 
 
+def _cloudflared_works(binary_path):
+    try:
+        p = subprocess.run(
+            [binary_path, "--version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=10,
+        )
+        return p.returncode == 0 and "cloudflared" in (p.stdout or "").lower()
+    except Exception:
+        return False
+
+
 def _ensure_cloudflared():
     """Download the official cloudflared binary once per Colab runtime."""
     binary_path = "/content/cloudflared"
-    if os.path.exists(binary_path) and os.access(binary_path, os.X_OK):
-        return binary_path
 
-    print("☁️ Cloudflare Tunnel ကို ပြင်ဆင်နေပါသည်...")
+    if os.path.exists(binary_path) and os.access(binary_path, os.X_OK):
+        if _cloudflared_works(binary_path):
+            print("☁️ cloudflared ရှိပြီးသားဖြစ်ပါသည်။")
+            return binary_path
+        try:
+            os.remove(binary_path)
+        except OSError:
+            pass
+
+    print("☁️ Cloudflare Tunnel binary ကို download လုပ်နေပါသည်...")
     url = _cloudflared_download_url()
     try:
         urllib.request.urlretrieve(url, binary_path)
         os.chmod(binary_path, 0o755)
     except Exception as exc:
         raise RuntimeError(f"cloudflared download မအောင်မြင်ပါ: {exc}") from exc
+
+    if not _cloudflared_works(binary_path):
+        raise RuntimeError("cloudflared binary ကို run မရပါ။ Colab Runtime ကို Restart ပြီး ထပ် Run ပါ။")
+
+    print("✅ cloudflared အဆင်သင့်ဖြစ်ပါပြီ။")
     return binary_path
 
 
@@ -982,22 +1009,113 @@ def _stop_previous_colab_servers():
         except Exception:
             pass
 
+    old_log_handle = globals().get("_YF_CLOUDFLARED_LOG_HANDLE")
+    if old_log_handle is not None:
+        try:
+            old_log_handle.close()
+        except Exception:
+            pass
+
     old_demo = globals().get("_YF_RUNNING_DEMO")
-    if old_demo is not None and old_demo is not demo:
+    if old_demo is not None:
         try:
             old_demo.close()
         except Exception:
             pass
 
 
+def _read_log_text(log_path):
+    try:
+        return Path(log_path).read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _start_cloudflare_process(cloudflared, port, protocol="http2", attempt=1):
+    """Start cloudflared without blocking on stdout.readline()."""
+    global _YF_CLOUDFLARED_PROCESS, _YF_CLOUDFLARED_LOG_HANDLE
+
+    log_path = f"/content/yf_cloudflared_{attempt}.log"
+    try:
+        os.remove(log_path)
+    except OSError:
+        pass
+
+    cmd = [
+        cloudflared,
+        "tunnel",
+        "--url", f"http://localhost:{port}",
+        "--no-autoupdate",
+        "--loglevel", "info",
+    ]
+    if protocol:
+        cmd += ["--protocol", protocol]
+
+    _YF_CLOUDFLARED_LOG_HANDLE = open(log_path, "w", encoding="utf-8")
+    _YF_CLOUDFLARED_PROCESS = subprocess.Popen(
+        cmd,
+        stdout=_YF_CLOUDFLARED_LOG_HANDLE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    return _YF_CLOUDFLARED_PROCESS, log_path
+
+
+def _wait_for_cloudflare_url(proc, log_path, timeout=60):
+    """Poll the cloudflared log file so timeout always works."""
+    pattern = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
+    deadline = time.time() + timeout
+    last_text = ""
+
+    while time.time() < deadline:
+        last_text = _read_log_text(log_path)
+        match = pattern.search(last_text)
+        if match:
+            return match.group(0), last_text
+
+        if proc.poll() is not None:
+            # Process exited; one final read before giving up.
+            time.sleep(0.25)
+            last_text = _read_log_text(log_path)
+            match = pattern.search(last_text)
+            if match:
+                return match.group(0), last_text
+            break
+
+        time.sleep(0.4)
+
+    return None, last_text
+
+
+def _terminate_process(proc):
+    if proc is None:
+        return
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except Exception:
+                proc.kill()
+    except Exception:
+        pass
+
+
 def launch_with_cloudflare(gradio_app):
-    """Launch Gradio locally in Colab and expose it through a Cloudflare Quick Tunnel."""
+    """
+    Colab-safe launcher:
+      1) prepare cloudflared first
+      2) launch Gradio locally with inline=False / share=False
+      3) open a TryCloudflare Quick Tunnel
+      4) retry once without forcing HTTP/2 if needed
+    """
     global _YF_CLOUDFLARED_PROCESS, _YF_RUNNING_DEMO
 
     _stop_previous_colab_servers()
+    cloudflared = _ensure_cloudflared()
     port = _find_free_port()
 
-    print(f"🚀 Gradio local server စတင်နေပါသည်... 127.0.0.1:{port}")
+    print(f"🚀 Gradio local server စတင်နေပါသည်... http://127.0.0.1:{port}")
     gradio_app.queue().launch(
         server_name="127.0.0.1",
         server_port=port,
@@ -1006,79 +1124,72 @@ def launch_with_cloudflare(gradio_app):
         prevent_thread_lock=True,
         show_error=True,
         quiet=True,
+        inline=False,       # IMPORTANT in Colab: do not stop here rendering localhost iframe
     )
     _YF_RUNNING_DEMO = gradio_app
 
-    if not _wait_for_local_server(port, timeout=30):
+    if not _wait_for_local_server(port, timeout=45):
         raise RuntimeError("Gradio local server မစတင်နိုင်ပါ။ Colab output ထဲက error ကို စစ်ပါ။")
 
-    cloudflared = _ensure_cloudflared()
-    cmd = [
-        cloudflared,
-        "tunnel",
-        "--url", f"http://127.0.0.1:{port}",
-        "--protocol", "http2",
-        "--no-autoupdate",
-        "--loglevel", "info",
-    ]
+    print("✅ Gradio localhost အဆင်သင့်ဖြစ်ပါပြီ။")
+    print("☁️ Cloudflare Quick Tunnel စတင်နေပါသည်...")
 
-    _YF_CLOUDFLARED_PROCESS = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
+    # Attempt 1: HTTP/2 is usually reliable in Colab networks where UDP/QUIC may be restricted.
+    proc, log_path = _start_cloudflare_process(cloudflared, port, protocol="http2", attempt=1)
+    public_url, logs = _wait_for_cloudflare_url(proc, log_path, timeout=60)
 
-    public_url = None
-    deadline = time.time() + 45
-    url_pattern = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
-    recent_logs = []
-
-    while time.time() < deadline:
-        if _YF_CLOUDFLARED_PROCESS.poll() is not None:
-            break
-        line = _YF_CLOUDFLARED_PROCESS.stdout.readline()
-        if not line:
-            time.sleep(0.1)
-            continue
-        line = line.rstrip()
-        recent_logs.append(line)
-        recent_logs = recent_logs[-20:]
-        match = url_pattern.search(line)
-        if match:
-            public_url = match.group(0)
-            break
-
+    # Attempt 2: let cloudflared choose protocol automatically.
     if not public_url:
+        print("⚠️ Cloudflare HTTP/2 attempt မအောင်မြင်သေးပါ။ Auto protocol နဲ့ တစ်ကြိမ် ပြန်ကြိုးစားနေပါသည်...")
+        _terminate_process(proc)
         try:
-            _YF_CLOUDFLARED_PROCESS.terminate()
+            globals().get("_YF_CLOUDFLARED_LOG_HANDLE").close()
         except Exception:
             pass
-        tail = "\n".join(recent_logs[-8:])
+        proc, log_path = _start_cloudflare_process(cloudflared, port, protocol=None, attempt=2)
+        public_url, logs = _wait_for_cloudflare_url(proc, log_path, timeout=60)
+
+    if not public_url:
+        _terminate_process(proc)
+        tail_lines = (logs or "").splitlines()[-20:]
+        tail = "\n".join(tail_lines)
         raise RuntimeError(
-            "Cloudflare public link မထွက်လာပါ။ Colab Internet/Cloudflare connection ကို စစ်ပြီး cell ကို ပြန် Run ပါ။"
-            + (f"\n\nCloudflare log:\n{tail}" if tail else "")
+            "Cloudflare public link မထွက်လာပါ။ Runtime > Restart session လုပ်ပြီး cell ကို ပြန် Run ကြည့်ပါ။"
+            + (f"\n\nနောက်ဆုံး Cloudflare log:\n{tail}" if tail else "")
         )
 
-    print("\n" + "=" * 72)
-    print("✅ YF TTS CLOUDFLARE LIVE WEBSITE READY")
-    print(f"🌐 Public Link: {public_url}")
-    print("📌 ဒီ link က gradio.live မဟုတ်ပါ — Cloudflare Quick Tunnel link ဖြစ်ပါတယ်။")
-    print("⚠️ Colab runtime ပိတ်သွားရင် link လည်း ပိတ်သွားပါမယ်။ ပြန် Run လုပ်ရင် link အသစ်ထွက်ပါမယ်။")
-    print("=" * 72 + "\n")
+    print("\n" + "=" * 76)
+    print("✅ YF TTS — CLOUDFLARE LIVE WEBSITE READY")
+    print(f"🌐 CLOUDFARE LIVE LINK: {public_url}")
+    print("📌 User တွေဆီ ဒီ trycloudflare.com link ကိုပဲ ပေးပါ။")
+    print("⚠️ Colab runtime ပိတ်သွားရင် link ပိတ်ပြီး ပြန် Run တဲ့အခါ link အသစ်ထွက်ပါမယ်။")
+    print("=" * 76 + "\n")
 
     try:
-        from IPython.display import HTML, display
-        html = (
-            '<div style="padding:16px;border:1px solid #d7b85a;border-radius:12px;">'
-            '<b>☁️ Cloudflare Live Website</b><br><br>'
-            f'<a href="{public_url}" target="_blank" style="font-size:18px;font-weight:700;">{public_url}</a>'
-            '</div>'
-        )
-        display(HTML(html))
-    except Exception:
-        pass
+        from IPython.display import HTML, Markdown, display
+
+        # A real anchor-button is more reliable than relying on Colab's auto-linked console text.
+        safe_url = str(public_url).replace('"', '&quot;')
+        display(HTML(f"""
+        <div style="padding:20px;border:2px solid #f0b429;border-radius:14px;
+                    background:#111827;color:white;margin:12px 0;font-family:Arial,sans-serif">
+          <div style="font-size:13px;opacity:.85;margin-bottom:12px">☁️ CLOUDFLARE LIVE WEBSITE</div>
+          <a href="{safe_url}" target="_blank" rel="noopener noreferrer"
+             style="display:inline-block;background:#2563eb;color:#fff;padding:14px 22px;
+                    border-radius:10px;font-size:17px;font-weight:800;text-decoration:none;
+                    margin-bottom:14px;cursor:pointer;pointer-events:auto">
+             🌐 OPEN CLOUDFLARE WEBSITE
+          </a>
+          <div style="margin-top:4px;font-size:13px;opacity:.8">Button မနှိပ်ရပါက အောက်က URL ကို Copy → Browser Address Bar မှာ Paste လုပ်ပါ။</div>
+          <div style="margin-top:8px;padding:10px;background:#0b1220;border-radius:8px;
+                      word-break:break-all;user-select:text;color:#93c5fd">{safe_url}</div>
+        </div>
+        """))
+
+        # Markdown link provides a second, independent clickable surface in Colab.
+        display(Markdown(f"### 🌐 [OPEN CLOUDFLARE LIVE WEBSITE]({public_url})"))
+    except Exception as e:
+        print(f"Cloudflare link card display warning: {e}")
 
     return public_url
 
