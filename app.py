@@ -291,6 +291,55 @@ def verify_vip_for_ui(vip_key, device_fingerprint, text):
     return msg, total, remaining, quota_counter_html(text, total, remaining)
 
 
+def wizard_progress_html(current_step):
+    labels = ["VIP Key", "စာသား", "နမူနာအသံ", "Result"]
+    cards = []
+    for step, label in enumerate(labels, start=1):
+        state = "active" if step == current_step else ("done" if step < current_step else "")
+        marker = "✓" if step < current_step else str(step)
+        cards.append(
+            f'<div class="wizard-step {state}"><span class="wizard-dot">{marker}</span>'
+            f'<span class="wizard-label">{label}</span></div>'
+        )
+    return '<div class="wizard-progress">' + ''.join(cards) + '</div>'
+
+
+def loading_flow_html():
+    return """
+    <div class="loading-flow">
+      <div class="pulse-orb"><span></span></div>
+      <div><b>အသံ ပြုလုပ်နေပါသည်…</b><p>နမူနာအသံကို ခွဲခြမ်းပြီး စာသားတိုင်းကို အသံပြောင်းနေပါသည်။</p></div>
+      <div class="loading-track"><i></i></div>
+      <div class="loading-steps"><span>1. Voice analyse</span><span>2. Clone</span><span>3. MP3 export</span></div>
+    </div>
+    """
+
+
+def verify_and_open_text_step(vip_key, device_fingerprint, text):
+    is_valid, msg, total, used, remaining = verify_vip_license(vip_key, device_fingerprint)
+    if not is_valid:
+        return msg, 0, 0, quota_counter_html(text, 0, 0), gr.update(visible=True), gr.update(visible=False), wizard_progress_html(1)
+    return msg, total, remaining, quota_counter_html(text, total, remaining), gr.update(visible=False), gr.update(visible=True), wizard_progress_html(2)
+
+
+def open_voice_step(text):
+    if not (text or "").strip():
+        return "⚠️ ဖတ်စေလိုသော စာသားကို အရင်ထည့်ပေးပါ။", gr.update(visible=True), gr.update(visible=False), wizard_progress_html(2)
+    return "✅ စာသားထည့်ပြီးပါပြီ။ နမူနာအသံကို တင်ပေးပါ။", gr.update(visible=False), gr.update(visible=True), wizard_progress_html(3)
+
+
+def open_result_step():
+    return (
+        gr.update(visible=False), gr.update(visible=True), wizard_progress_html(4),
+        gr.update(value=loading_flow_html(), visible=True),
+        "⏳ အသံဖိုင်ကို ပြုလုပ်နေပါသည်…",
+    )
+
+
+def hide_loading_flow():
+    return gr.update(visible=False)
+
+
 def update_quota_counter(text, total_quota, remaining_quota):
     return quota_counter_html(text, total_quota, remaining_quota)
 
@@ -675,11 +724,42 @@ body {
 .char-counter.over { color: #ffaaa5; border-color: rgba(239,68,68,.38); background: rgba(239,68,68,.09); }
 .char-counter.neutral { color: #d7cba9; }
 .footer-note { text-align: center; color: #8f856f; font-size: 12px; margin-top: 18px; }
+.wizard-progress { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px; max-width:760px; margin:0 auto 17px; }
+.wizard-step { min-width:0; display:flex; align-items:center; justify-content:center; gap:7px; padding:9px 6px; border:1px solid rgba(231,191,97,.14); border-radius:12px; color:#8f856f; background:rgba(255,255,255,.02); font-size:12px; font-weight:700; }
+.wizard-step.active { color:#ffecb4; border-color:rgba(240,197,93,.65); background:linear-gradient(115deg,rgba(187,123,19,.28),rgba(240,197,93,.10)); box-shadow:0 6px 19px rgba(193,130,16,.16); }
+.wizard-step.done { color:#bce9c7; border-color:rgba(88,190,123,.35); }
+.wizard-dot { display:grid; place-items:center; flex:0 0 21px; width:21px; height:21px; border-radius:50%; color:#d7cba9; background:rgba(255,255,255,.09); font-size:11px; }
+.wizard-step.active .wizard-dot { color:#231503; background:#f0c55d; }
+.wizard-step.done .wizard-dot { color:#0d351b; background:#83d9a0; }
+.wizard-stage { animation:wizard-in .4s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes wizard-in { from { opacity:0; transform:translateY(17px) scale(.985); filter:blur(3px); } to { opacity:1; transform:translateY(0) scale(1); filter:blur(0); } }
+.stage-card { max-width:760px; margin:0 auto; }
+#reference-audio, #reference-audio .wrap, #reference-audio .audio-container, #reference-audio [class*="wave"] { min-width:0 !important; max-width:100% !important; width:100% !important; box-sizing:border-box !important; overflow:hidden !important; }
+#reference-audio canvas, #reference-audio svg, #reference-audio [class*="wave"] canvas { width:100% !important; max-width:100% !important; height:58px !important; max-height:58px !important; }
+#reference-audio .audio-container { min-height:156px !important; }
+.loading-flow { position:relative; overflow:hidden; margin:6px 0 16px; padding:18px; border:1px solid rgba(240,197,93,.3); border-radius:16px; background:linear-gradient(135deg,rgba(187,123,19,.18),rgba(21,19,13,.75)); }
+.loading-flow > div:nth-child(2) { margin-left:62px; min-height:44px; }
+.loading-flow b { color:#ffe4a0; font-size:16px; }
+.loading-flow p { margin:3px 0 0; color:#c9bfa9; font-size:12px; line-height:1.55; }
+.pulse-orb { position:absolute; left:17px; top:20px; width:38px; height:38px; border-radius:50%; background:#e7b547; box-shadow:0 0 0 0 rgba(240,197,93,.55); animation:pulse-orb 1.45s infinite; }
+.pulse-orb span { position:absolute; inset:11px; border-radius:50%; background:#271703; }
+@keyframes pulse-orb { 70% { box-shadow:0 0 0 13px rgba(240,197,93,0); } 100% { box-shadow:0 0 0 0 rgba(240,197,93,0); } }
+.loading-track { height:5px; margin-top:14px; overflow:hidden; border-radius:999px; background:rgba(255,255,255,.10); }
+.loading-track i { display:block; width:42%; height:100%; border-radius:inherit; background:linear-gradient(90deg,#b57512,#ffe19a,#b57512); animation:loading-slide 1.3s ease-in-out infinite; }
+@keyframes loading-slide { from { transform:translateX(-110%); } to { transform:translateX(320%); } }
+.loading-steps { display:flex; justify-content:space-between; gap:6px; margin-top:10px; color:#cdbb8e; font-size:10px; }
 @media (max-width: 700px) {
     .gradio-container { padding: 12px 10px 28px !important; }
     .hero-card { padding: 24px 19px; border-radius: 17px; }
     .panel { padding: 13px !important; border-radius: 15px !important; }
     .hero-card::after { right: 15px; font-size: 114px; }
+    .hero-card p { font-size:13px; line-height:1.55; }
+    .wizard-progress { gap:4px; margin-bottom:13px; }
+    .wizard-step { min-height:56px; flex-direction:column; gap:3px; padding:6px 2px; font-size:10px; }
+    .wizard-label { overflow:hidden; max-width:100%; text-overflow:ellipsis; white-space:nowrap; }
+    .stage-card { margin:0; }
+    #reference-audio .audio-container { min-height:142px !important; }
+    .loading-steps { font-size:9px; }
 }
 """
 
@@ -813,89 +893,63 @@ with gr.Blocks(title="YF TTS · Burmese AI Voice Studio", theme=APP_THEME, css=A
     </section>
     """)
 
-    with gr.Row(equal_height=False):
-        with gr.Column(scale=6, elem_classes="panel"):
-            gr.HTML("""
-            <div class="section-title">
-                <div class="section-number">STEP 01</div>
-                <h3>အသံထုတ်လုပ်ရန်</h3>
-                <p>VIP Key၊ ဖတ်စေလိုသောစာနှင့် နမူနာအသံကို ထည့်ပါ။</p>
-            </div>
-            """)
-            vip_key = gr.Textbox(
-                label="🔑 VIP License Key",
-                placeholder="VIP-USER01-20260430-XXXXXXXX",
-                type="password",
-            )
-            verify_vip_btn = gr.Button("👑 VIP Key Verify + Quota ရယူမည်", variant="secondary")
-            vip_verify_status = gr.Markdown("VIP Key ကို Verify လုပ်ပြီး သင့် Total Character Quota ကို ရယူပါ။")
+    wizard_progress = gr.HTML(wizard_progress_html(1))
 
-            text_in = gr.Textbox(
-                label="📝 ဖတ်စေလိုသော စာသား",
-                lines=13,
-                placeholder="ဇာတ်ညွှန်း သို့မဟုတ် စာပိုဒ်အရှည်ကို ဤနေရာတွင် ကူးထည့်ပါ...",
-            )
-            char_counter = gr.HTML(quota_counter_html("", 0, 0))
-            audio_in = gr.Audio(
-                type="filepath",
-                label="🎤 နမူနာအသံ (5–15 seconds)",
-            )
+    with gr.Column(visible=True, elem_classes=["wizard-stage", "stage-card", "panel"]) as vip_step:
+        gr.HTML("""
+        <div class="section-title"><div class="section-number">STEP 01 · VIP ACCESS</div>
+        <h3>VIP Key ကို အတည်ပြုပါ</h3><p>သင့် License Key ကို စစ်ဆေးပြီး quota ကို ရယူပါ။</p></div>
+        """)
+        vip_key = gr.Textbox(label="🔑 VIP License Key", placeholder="VIP-USER01-20260430-XXXXXXXX", type="password")
+        verify_vip_btn = gr.Button("Continue → VIP Key Verify", variant="primary", elem_id="generate-btn")
+        vip_verify_status = gr.Markdown("VIP Key ကို Verify လုပ်ပြီး နောက်အဆင့်သို့ ဆက်သွားပါ။")
 
-            with gr.Accordion("⚙️ Advanced Voice Settings", open=False):
-                control_in = gr.Textbox(
-                    label="အသံပုံစံညွှန်ကြားချက် (Optional)",
-                    placeholder="ဥပမာ — cheerful, calm, whisper, fast",
-                )
-                clone_str = gr.Slider(
-                    minimum=1.0,
-                    maximum=3.0,
-                    value=2.8,
-                    step=0.1,
-                    label="Clone Strength",
-                )
-                use_transcript = gr.Checkbox(
-                    label="နမူနာအသံ၏ မူရင်းစာသားကို အသုံးပြုမည်",
-                    value=False,
-                )
-                ref_text_in = gr.Textbox(
-                    label="နမူနာအသံ၏ မူရင်းစာသား (Optional)",
-                    lines=2,
-                )
+    with gr.Column(visible=False, elem_classes=["wizard-stage", "stage-card", "panel"]) as text_step:
+        gr.HTML("""
+        <div class="section-title"><div class="section-number">STEP 02 · SCRIPT</div>
+        <h3>ဖတ်စေလိုသော စာသားထည့်ပါ</h3><p>ဇာတ်ညွှန်း သို့မဟုတ် စာပိုဒ်ကို ထည့်ပြီး နောက်တစ်ဆင့်သို့ ဆက်ပါ။</p></div>
+        """)
+        text_in = gr.Textbox(label="📝 ဖတ်စေလိုသော စာသား", lines=13, placeholder="ဇာတ်ညွှန်း သို့မဟုတ် စာပိုဒ်အရှည်ကို ဤနေရာတွင် ကူးထည့်ပါ...")
+        char_counter = gr.HTML(quota_counter_html("", 0, 0))
+        text_continue_btn = gr.Button("Continue → နမူနာအသံ ထည့်မည်", variant="primary", elem_id="generate-btn")
+        text_step_status = gr.Markdown("")
 
-            gen_btn = gr.Button(
-                "✨ အသံ စတင်ထုတ်လုပ်မည်",
-                variant="primary",
-                elem_id="generate-btn",
-            )
+    with gr.Column(visible=False, elem_classes=["wizard-stage", "stage-card", "panel"]) as voice_step:
+        gr.HTML("""
+        <div class="section-title"><div class="section-number">STEP 03 · VOICE SAMPLE</div>
+        <h3>နမူနာအသံ ထည့်ပါ</h3><p>5–15 seconds ရှိသော အသံနမူနာကောင်းတစ်ခုကို တင်ပါ။</p></div>
+        """)
+        audio_in = gr.Audio(type="filepath", sources=["upload"], label="🎤 နမူနာအသံ (5–15 seconds)", elem_id="reference-audio")
+        with gr.Accordion("⚙️ Advanced Voice Settings", open=False):
+            control_in = gr.Textbox(label="အသံပုံစံညွှန်ကြားချက် (Optional)", placeholder="ဥပမာ — cheerful, calm, whisper, fast")
+            clone_str = gr.Slider(minimum=1.0, maximum=3.0, value=2.8, step=0.1, label="Clone Strength")
+            use_transcript = gr.Checkbox(label="နမူနာအသံ၏ မူရင်းစာသားကို အသုံးပြုမည်", value=False)
+            ref_text_in = gr.Textbox(label="နမူနာအသံ၏ မူရင်းစာသား (Optional)", lines=2)
+        gen_btn = gr.Button("✨ MP3 စတင်ထုတ်လုပ်မည်", variant="primary", elem_id="generate-btn")
 
-        with gr.Column(scale=5, elem_classes="panel"):
-            gr.HTML("""
-            <div class="section-title">
-                <div class="section-number">STEP 02</div>
-                <h3>ရလဒ်</h3>
-                <p>လုပ်ဆောင်မှုအခြေအနေနှင့် ထွက်ရှိလာသောအသံကို ဒီမှာကြည့်ပါ။</p>
-            </div>
-            """)
-            status_markdown = gr.Markdown("အသံထုတ်လုပ်ရန် အဆင်သင့်ဖြစ်ပါပြီ။")
-            audio_preview = gr.Audio(
-                label="🎧 အသံရလဒ်ကို နားဆင်ရန်",
-                type="filepath",
-            )
-            direct_download_html = gr.HTML()
+    with gr.Column(visible=False, elem_classes=["wizard-stage", "stage-card", "panel"]) as result_step:
+        gr.HTML("""
+        <div class="section-title"><div class="section-number">STEP 04 · RESULT</div>
+        <h3>သင့်အသံဖိုင်ကို ပြင်ဆင်နေပါသည်</h3><p>ပြီးသွားလျှင် MP3 ကို ဒီနေရာကနေ download လုပ်နိုင်ပါသည်။</p></div>
+        """)
+        loading_flow = gr.HTML(visible=False)
+        status_markdown = gr.Markdown("⏳ အသံထုတ်လုပ်မှုကို စတင်နေပါသည်…")
+        audio_preview = gr.Audio(label="🎧 အသံရလဒ်ကို နားဆင်ရန်", type="filepath")
+        direct_download_html = gr.HTML()
 
     gr.HTML('<div class="footer-note">YF TTS · Burmese AI Voice Studio · VIP Access</div>')
 
     verify_vip_btn.click(
-        fn=verify_vip_for_ui,
+        fn=verify_and_open_text_step,
         inputs=[vip_key, device_fingerprint, text_in],
-        outputs=[vip_verify_status, vip_total_quota, vip_remaining_quota, char_counter],
+        outputs=[vip_verify_status, vip_total_quota, vip_remaining_quota, char_counter, vip_step, text_step, wizard_progress],
         js=GET_DEVICE_FINGERPRINT_JS,
     )
 
     vip_key.submit(
-        fn=verify_vip_for_ui,
+        fn=verify_and_open_text_step,
         inputs=[vip_key, device_fingerprint, text_in],
-        outputs=[vip_verify_status, vip_total_quota, vip_remaining_quota, char_counter],
+        outputs=[vip_verify_status, vip_total_quota, vip_remaining_quota, char_counter, vip_step, text_step, wizard_progress],
         js=GET_DEVICE_FINGERPRINT_JS,
     )
 
@@ -905,12 +959,23 @@ with gr.Blocks(title="YF TTS · Burmese AI Voice Studio", theme=APP_THEME, css=A
         outputs=[char_counter],
     )
 
-    gen_btn.click(
+    text_continue_btn.click(
+        fn=open_voice_step,
+        inputs=[text_in],
+        outputs=[text_step_status, text_step, voice_step, wizard_progress],
+    )
+
+    generation_event = gen_btn.click(
+        fn=open_result_step,
+        outputs=[voice_step, result_step, wizard_progress, loading_flow, status_markdown],
+    )
+    generation_done = generation_event.then(
         fn=generate_vip_long,
         inputs=[vip_key, device_fingerprint, text_in, control_in, audio_in, use_transcript, ref_text_in, clone_str],
         outputs=[audio_preview, direct_download_html, status_markdown, vip_total_quota, vip_remaining_quota, char_counter],
         js=GET_DEVICE_FINGERPRINT_JS,
     )
+    generation_done.then(fn=hide_loading_flow, outputs=[loading_flow])
 
 # ==========================================================
 # 6. GOOGLE COLAB + CLOUDFLARE QUICK TUNNEL LAUNCHER (FIXED)
@@ -1105,9 +1170,9 @@ def launch_with_cloudflare(gradio_app):
     """
     Colab-safe launcher:
       1) prepare cloudflared first
-      2) launch Gradio locally with inline=False / share=False
+      2) launch Gradio locally and create a Gradio share link
       3) open a TryCloudflare Quick Tunnel
-      4) retry once without forcing HTTP/2 if needed
+      4) print both public links
     """
     global _YF_CLOUDFLARED_PROCESS, _YF_RUNNING_DEMO
 
@@ -1116,10 +1181,10 @@ def launch_with_cloudflare(gradio_app):
     port = _find_free_port()
 
     print(f"🚀 Gradio local server စတင်နေပါသည်... http://127.0.0.1:{port}")
-    gradio_app.queue().launch(
+    launch_result = gradio_app.queue().launch(
         server_name="127.0.0.1",
         server_port=port,
-        share=False,
+        share=True,
         debug=False,
         prevent_thread_lock=True,
         show_error=True,
@@ -1127,6 +1192,10 @@ def launch_with_cloudflare(gradio_app):
         inline=False,       # IMPORTANT in Colab: do not stop here rendering localhost iframe
     )
     _YF_RUNNING_DEMO = gradio_app
+    # Gradio versions return different launch tuple shapes, so read the public URL safely.
+    gradio_share_url = getattr(gradio_app, "share_url", None)
+    if not gradio_share_url and isinstance(launch_result, tuple):
+        gradio_share_url = next((item for item in launch_result if isinstance(item, str) and ".gradio.live" in item), None)
 
     if not _wait_for_local_server(port, timeout=45):
         raise RuntimeError("Gradio local server မစတင်နိုင်ပါ။ Colab output ထဲက error ကို စစ်ပါ။")
@@ -1159,9 +1228,10 @@ def launch_with_cloudflare(gradio_app):
         )
 
     print("\n" + "=" * 76)
-    print("✅ YF TTS — CLOUDFLARE LIVE WEBSITE READY")
+    print("✅ YF TTS — PUBLIC LINKS READY")
     print(f"🌐 CLOUDFARE LIVE LINK: {public_url}")
-    print("📌 User တွေဆီ ဒီ trycloudflare.com link ကိုပဲ ပေးပါ။")
+    print(f"🔗 GRADIO SHARE LINK: {gradio_share_url or 'မထွက်သေးပါ — Cloudflare link ကို အသုံးပြုပါ'}")
+    print("📌 Link နှစ်ခုလုံးသည် တူညီသော app/runtime ကိုဖွင့်ပေးပါသည်။")
     print("⚠️ Colab runtime ပိတ်သွားရင် link ပိတ်ပြီး ပြန် Run တဲ့အခါ link အသစ်ထွက်ပါမယ်။")
     print("=" * 76 + "\n")
 
@@ -1170,6 +1240,14 @@ def launch_with_cloudflare(gradio_app):
 
         # A real anchor-button is more reliable than relying on Colab's auto-linked console text.
         safe_url = str(public_url).replace('"', '&quot;')
+        safe_share_url = str(gradio_share_url or "").replace('"', '&quot;')
+        gradio_card = "" if not gradio_share_url else f"""
+          <a href="{safe_share_url}" target="_blank" rel="noopener noreferrer"
+             style="display:inline-block;background:#7c3aed;color:#fff;padding:14px 22px;
+                    border-radius:10px;font-size:17px;font-weight:800;text-decoration:none;
+                    margin:0 0 14px 8px;cursor:pointer;pointer-events:auto">
+             🔗 OPEN GRADIO SHARE LINK
+          </a>"""
         display(HTML(f"""
         <div style="padding:20px;border:2px solid #f0b429;border-radius:14px;
                     background:#111827;color:white;margin:12px 0;font-family:Arial,sans-serif">
@@ -1180,6 +1258,7 @@ def launch_with_cloudflare(gradio_app):
                     margin-bottom:14px;cursor:pointer;pointer-events:auto">
              🌐 OPEN CLOUDFLARE WEBSITE
           </a>
+          {gradio_card}
           <div style="margin-top:4px;font-size:13px;opacity:.8">Button မနှိပ်ရပါက အောက်က URL ကို Copy → Browser Address Bar မှာ Paste လုပ်ပါ။</div>
           <div style="margin-top:8px;padding:10px;background:#0b1220;border-radius:8px;
                       word-break:break-all;user-select:text;color:#93c5fd">{safe_url}</div>
@@ -1187,11 +1266,14 @@ def launch_with_cloudflare(gradio_app):
         """))
 
         # Markdown link provides a second, independent clickable surface in Colab.
-        display(Markdown(f"### 🌐 [OPEN CLOUDFLARE LIVE WEBSITE]({public_url})"))
+        display(Markdown(
+            f"### 🌐 [OPEN CLOUDFLARE LIVE WEBSITE]({public_url})" +
+            (f"  |  🔗 [OPEN GRADIO SHARE LINK]({gradio_share_url})" if gradio_share_url else "")
+        ))
     except Exception as e:
         print(f"Cloudflare link card display warning: {e}")
 
-    return public_url
+    return public_url, gradio_share_url
 
 
-CLOUDFLARE_PUBLIC_URL = launch_with_cloudflare(demo)
+CLOUDFLARE_PUBLIC_URL, GRADIO_SHARE_URL = launch_with_cloudflare(demo)
