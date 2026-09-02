@@ -505,7 +505,13 @@ def release_vip_quota(vip_key, request_chars):
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"🚀 Running on Device: {device.upper()}")
 print("⏳ VoxCPM2 Model ကို GPU ပေါ်သို့ စတင်ဆွဲတင်နေပါသည်...")
-model = VoxCPM.from_pretrained("openbmb/VoxCPM2", load_denoiser=False)
+# Colab Tesla T4 cannot reliably run VoxCPM2's torch.compile warm-up
+# (bfloat16/Dynamo tracing). Eager mode is slower to start generating but stable.
+model = VoxCPM.from_pretrained(
+    "openbmb/VoxCPM2",
+    load_denoiser=False,
+    optimize=False,
+)
 print("✅ VoxCPM2 Model Loaded Successfully (Ready for 30+ Mins Audio)!")
 
 def split_burmese_text_long(text, max_chars=90):
