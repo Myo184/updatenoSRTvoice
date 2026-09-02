@@ -2,10 +2,38 @@
 #@markdown ဤနေရာတွင် Code များကို ကြည့်ရန်မလိုပါ။ **ဘယ်ဘက်ရှိ Play ခလုတ်ကို နှိပ်လိုက်ရုံဖြင့်** စတင်အသုံးပြုနိုင်ပါသည်။
 
 # ==========================================================
-# 1. INSTALL PACKAGES (AUTOMATIC DEPENDENCIES)
+# 1. INSTALL PACKAGES (VERSION-LOCKED / REPRODUCIBLE)
 # ==========================================================
-import subprocess, sys
-subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "voxcpm", "soundfile", "gradio", "torch", "numpy", "pydub", "pymongo", "dnspython", "cryptography"])
+import subprocess
+import sys
+
+# IMPORTANT:
+# - Keep every package version fixed. Do not remove the ==version parts.
+# - Run this notebook from a fresh Colab runtime after changing this list.
+# - Re-running the cell will keep the same versions; pip will not upgrade them.
+LOCKED_PACKAGES = [
+    "voxcpm==2.0.3",
+    "soundfile==0.14.0",
+    "gradio==6.26.0",
+    "torch==2.13.0",
+    "numpy==2.2.6",
+    "pydub==0.25.1",
+    "pymongo==4.15.3",
+    "dnspython==2.8.0",
+    "cryptography==46.0.3",
+]
+
+subprocess.check_call([
+    sys.executable,
+    "-m",
+    "pip",
+    "install",
+    "--quiet",
+    "--no-cache-dir",
+    "--upgrade-strategy",
+    "only-if-needed",
+    *LOCKED_PACKAGES,
+])
 
 # ==========================================================
 # 2. SECURE LIVE LICENSE VERIFICATION ENGINE
@@ -287,7 +315,7 @@ def loading_flow_html():
       <div class="pulse-orb"><span></span></div>
       <div><b>အသံ ပြုလုပ်နေပါသည်…</b><p>နမူနာအသံကို ခွဲခြမ်းပြီး စာသားတိုင်းကို အသံပြောင်းနေပါသည်။</p></div>
       <div class="loading-track"><i></i></div>
-      <div class="loading-steps"><span>1. Voice analyse</span><span>2. Clone</span><span>3. MP3 export</span></div>
+      <div class="loading-steps"><span>1. Voice analyse</span><span>2. Clone</span><span>3. MP3</span></div>
     </div>
     """
 
@@ -588,7 +616,6 @@ def generate_vip_long(vip_key, device_fingerprint, text, control_instruction, re
     if os.path.exists(temp_wav_path):
         os.remove(temp_wav_path)
 
-    # MP3 direct download
     with open(output_mp3_path, "rb") as f:
         mp3_b64 = base64.b64encode(f.read()).decode()
 
@@ -953,7 +980,7 @@ with gr.Blocks(title="YF TTS · Burmese AI Voice Studio", theme=APP_THEME, css=A
         MP3 အသံဖိုင်အဖြစ် ထုတ်လုပ်ပါ။</p>
         <div class="feature-row">
             <span class="feature-pill">🎙️ Voice Studio</span>
-            <span class="feature-pill">🎵 MP3 Output</span>
+            <span class="feature-pill">📥 MP3 Download</span>
             <span class="feature-pill">👑 VIP</span>
         </div>
     </section>
