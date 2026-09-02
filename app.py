@@ -15,7 +15,9 @@ LOCKED_PACKAGES = [
     "voxcpm==2.0.3",
     "soundfile==0.14.0",
     "gradio==6.26.0",
-    "torch==2.13.0",
+    # Torch and TorchAudio MUST stay on the same release/CUDA build in Colab.
+    "torch==2.8.0",
+    "torchaudio==2.8.0",
     "numpy==2.2.6",
     "pydub==0.25.1",
     "pymongo==4.15.3",
